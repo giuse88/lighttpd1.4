@@ -641,9 +641,10 @@ int main (int argc, char **argv) {
 		return 0;
 	}
 
+	puts("This is my version of Lighttpd :D :D ");
 	/* close stdin and stdout, as they are not needed */
 	openDevNull(STDIN_FILENO);
-	openDevNull(STDOUT_FILENO);
+//	openDevNull(STDOUT_FILENO);
 
 	if (0 != config_set_defaults(srv)) {
 		log_error_write(srv, __FILE__, __LINE__, "s",
