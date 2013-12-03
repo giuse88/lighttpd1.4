@@ -120,11 +120,14 @@ INIT_FUNC(mod_webdav_init) {
 	plugin_data *p;
 
 	p = calloc(1, sizeof(*p));
+
 	p->tmp_buf = buffer_init();
+
 	p->uri.scheme = buffer_init();
 	p->uri.path_raw = buffer_init();
 	p->uri.path = buffer_init();
 	p->uri.authority = buffer_init();
+
 	p->physical.path = buffer_init();
 	p->physical.rel_path = buffer_init();
 	p->physical.doc_root = buffer_init();
@@ -1272,7 +1275,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 
 	switch (con->request.http_method) {
 	case HTTP_METHOD_PROPFIND:
-
 		/* they want to know the properties of the directory */
 		req_props = NULL;
 
@@ -1572,6 +1574,7 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			con->http_status = 403;
 			return HANDLER_FINISHED;
 		}
+
 		/* does the client have a lock for this connection ? */
 		if (!webdav_has_lock(srv, con, p, con->uri.path)) {
 			con->http_status = 423;
@@ -1651,6 +1654,7 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 		chunkqueue *cq = con->request_content_queue;
 		chunk *c;
 		data_string *ds_range;
+
 		if (p->conf.is_readonly) {
 			con->http_status = 403;
 			return HANDLER_FINISHED;
@@ -2545,6 +2549,7 @@ propmatch_cleanup:
 	default:
 		break;
 	}
+
 	/* not found */
 	return HANDLER_GO_ON;
 }
@@ -2554,15 +2559,16 @@ propmatch_cleanup:
 
 int mod_webdav_plugin_init(plugin *p);
 int mod_webdav_plugin_init(plugin *p) {
-
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("webdav");
+
 	p->init        = mod_webdav_init;
 	p->handle_uri_clean  = mod_webdav_uri_handler;
 	p->handle_physical   = mod_webdav_subrequest_handler;
 	p->connection_reset  = mod_webdav_con_reset;
 	p->set_defaults  = mod_webdav_set_defaults;
 	p->cleanup     = mod_webdav_free;
+
 	p->data        = NULL;
 
 	return 0;
