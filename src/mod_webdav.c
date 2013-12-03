@@ -87,10 +87,20 @@ typedef struct {
 } plugin_data;
 
 typedef struct {
-	enum {UNSET, SET} state;
-	buffer * source;
+	enum {DESTINATION_UNPROCESSED, DESTINATION_PROCESSED} state;
+	buffer * file_source;
 } handler_ctx;
 
+static handler_ctx * handler_ctx_init(void) {
+	handler_ctx * hctx;
+	hctx = calloc(1, sizeof(*hctx));
+	hctx->state = DESTINATION_UNPROCESSED;
+	return hctx;
+}
+
+static void handler_ctx_free(handler_ctx *hctx) {
+	free(hctx);
+}
 
 static buffer * extract_path_from_uri(buffer * uri){
   char * pch;
@@ -100,22 +110,9 @@ static buffer * extract_path_from_uri(buffer * uri){
   while (pch!=NULL && counter < 2) {
 	counter +=1;
 	position = pch-str+1;
-	//printf("Counter : %d, Position : %d \n ", counter, position);
 	pch=strchr(pch+1,'/');
   }
-  puts(pch);
   return buffer_init_string(pch);
-}
-
-static handler_ctx * handler_ctx_init(void) {
-	handler_ctx * hctx;
-	hctx = calloc(1, sizeof(*hctx));
-	hctx->state = UNSET;
-	return hctx;
-}
-
-static void handler_ctx_free(handler_ctx *hctx) {
-	free(hctx);
 }
 
 /* init the plugin data */
@@ -123,14 +120,11 @@ INIT_FUNC(mod_webdav_init) {
 	plugin_data *p;
 
 	p = calloc(1, sizeof(*p));
-
 	p->tmp_buf = buffer_init();
-
 	p->uri.scheme = buffer_init();
 	p->uri.path_raw = buffer_init();
 	p->uri.path = buffer_init();
 	p->uri.authority = buffer_init();
-
 	p->physical.path = buffer_init();
 	p->physical.rel_path = buffer_init();
 	p->physical.doc_root = buffer_init();
@@ -191,6 +185,19 @@ FREE_FUNC(mod_webdav_free) {
 	buffer_free(p->tmp_buf);
 
 	free(p);
+
+	return HANDLER_GO_ON;
+}
+
+URIHANDLER_FUNC(mod_webdav_con_reset) {
+	plugin_data *p = p_d;
+
+	UNUSED(srv);
+
+	if (con->plugin_ctx[p->id]) {
+		handler_ctx_free(con->plugin_ctx[p->id]);
+		con->plugin_ctx[p->id] = NULL;
+	}
 
 	return HANDLER_GO_ON;
 }
@@ -1265,7 +1272,7 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 
 	switch (con->request.http_method) {
 	case HTTP_METHOD_PROPFIND:
-		puts("ProFind request");
+
 		/* they want to know the properties of the directory */
 		req_props = NULL;
 
@@ -1565,7 +1572,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			con->http_status = 403;
 			return HANDLER_FINISHED;
 		}
-		puts("Request for delete");
 		/* does the client have a lock for this connection ? */
 		if (!webdav_has_lock(srv, con, p, con->uri.path)) {
 			con->http_status = 423;
@@ -1645,7 +1651,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 		chunkqueue *cq = con->request_content_queue;
 		chunk *c;
 		data_string *ds_range;
-		puts("Request for put");
 		if (p->conf.is_readonly) {
 			con->http_status = 403;
 			return HANDLER_FINISHED;
@@ -1819,7 +1824,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 		int overwrite = 1;
 		handler_ctx *hctx;
 
-		puts("Issued a request for copy or move");
 		if (p->conf.is_readonly) {
 			con->http_status = 403;
 			return HANDLER_FINISHED;
@@ -1839,10 +1843,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			con->http_status = 400;
 			return HANDLER_FINISHED;
 		}
-		printf("Destination     : %s\n", destination->ptr );
-		printf("Source          : %s\n", con->uri.path->ptr);
-		printf("Source Physical : %s\n", con->physical.path->ptr);
-		fflush(stdout);
 
 		if (NULL != (ds = (data_string *)array_get_element(con->request.headers, "Overwrite"))) {
 			if (ds->value->used != 2 ||
@@ -1853,8 +1853,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			}
 			overwrite = (ds->value->ptr[0] == 'F' ? 0 : 1);
 		}
-		printf("Overwrite : %d\n", overwrite);
-		fflush(stdout);
 		/* let's parse the Destination
 		 *
 		 * http://127.0.0.1:1025/dav/litmus/copydest
@@ -1926,21 +1924,12 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			buffer_append_string_buffer(p->physical.path, p->physical.rel_path);
 		}
 
-		/* let's see if the source is a directory
-		 * if yes, we fail with 501 */
-		puts("After cleaning process :");
-		printf("Destination : %s\n", p->physical.path->ptr );
-		printf("Source      : %s\n", con->physical.path->ptr);
-		fflush(stdout);
-
-
 		if (con->plugin_ctx[p->id] == NULL) {
 			hctx = handler_ctx_init();
-			hctx->source = buffer_init_string(con->physical.path->ptr);
-			hctx->state = SET;
+			hctx->file_source = buffer_init_string(con->physical.path->ptr);
 			con->plugin_ctx[p->id] = hctx;
-			fflush(stdout);
 			buffer_reset(con->physical.path);
+			buffer_reset(con->uri.path);
 			buffer_copy_string_buffer(con->request.uri, extract_path_from_uri(destination));
 			return HANDLER_COMEBACK;
 		} else {
@@ -1949,17 +1938,14 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			buffer_path_simplify(tmp, con->physical.path);
 			buffer_free(p->physical.path);
 			p->physical.path = tmp;
-
 			tmp=buffer_init();
-			buffer_path_simplify(tmp, hctx->source);
+			buffer_path_simplify(tmp, hctx->file_source);
 			buffer_free(con->physical.path);
 			con->physical.path = tmp;
-
-			puts("After processing the the destination URL");
-			printf("Source      : %s\n", con->physical.path->ptr);
-			printf("Destination : %s\n" , p->physical.path->ptr);
-			fflush(stdout);
 		}
+
+		/* let's see if the source is a directory
+		 * if yes, we fail with 501 */
 
 		if (-1 == stat(con->physical.path->ptr, &st)) {
 			/* don't about it yet, unlink will fail too */
@@ -2119,7 +2105,6 @@ URIHANDLER_FUNC(mod_webdav_subrequest_handler) {
 			return HANDLER_FINISHED;
 		}
 
-		puts("Request for proppatch");
 		if (!webdav_has_lock(srv, con, p, con->uri.path)) {
 			con->http_status = 423;
 			return HANDLER_FINISHED;
@@ -2560,7 +2545,6 @@ propmatch_cleanup:
 	default:
 		break;
 	}
-	puts("Request not found");
 	/* not found */
 	return HANDLER_GO_ON;
 }
@@ -2570,14 +2554,15 @@ propmatch_cleanup:
 
 int mod_webdav_plugin_init(plugin *p);
 int mod_webdav_plugin_init(plugin *p) {
+
 	p->version     = LIGHTTPD_VERSION_ID;
 	p->name        = buffer_init_string("webdav");
 	p->init        = mod_webdav_init;
 	p->handle_uri_clean  = mod_webdav_uri_handler;
 	p->handle_physical   = mod_webdav_subrequest_handler;
+	p->connection_reset  = mod_webdav_con_reset;
 	p->set_defaults  = mod_webdav_set_defaults;
 	p->cleanup     = mod_webdav_free;
-
 	p->data        = NULL;
 
 	return 0;
